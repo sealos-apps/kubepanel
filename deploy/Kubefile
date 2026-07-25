@@ -1,0 +1,10 @@
+FROM scratch
+ARG TARGETARCH
+
+USER 65532:65532
+
+COPY registry_${TARGETARCH} registry
+COPY charts charts
+COPY kubepanel-entrypoint.sh kubepanel-entrypoint.sh
+
+CMD ["bash kubepanel-entrypoint.sh"]
