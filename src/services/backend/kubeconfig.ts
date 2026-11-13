@@ -1,7 +1,10 @@
+import { Config, findHomeDir, KubeConfig as KubernetesConfig } from '@kubernetes/client-node';
 import { AxiosRequestConfig } from 'axios';
+import { existsSync, readFileSync } from 'fs';
 import https from 'https';
 import jsYaml from 'js-yaml';
 import { camelCase, entries } from 'lodash';
+import { join } from 'path';
 import { KebabCasedPropertiesDeep, ReadonlyDeep } from 'type-fest';
 
 type Cluster = {
@@ -165,23 +168,60 @@ export function getAxiosRequestConfig(kubeConfig: KubeConfig): AxiosRequestConfi
     throw new Error('cannot get a current cluster in kubeconfig');
   }
 
-  const config: AxiosRequestConfig = {};
+  // Resolve the API server and TLS trust from the server's configuration, just
+  // like the Sealos frontend. Only user credentials come from the request.
+  let trustedCluster: ReturnType<KubernetesConfig['getCurrentCluster']>;
+  let ca: Buffer | undefined;
+  try {
+    const defaults = new KubernetesConfig();
+    if (process.env.KUBECONFIG) {
+      defaults.loadFromDefault();
+    } else {
+      const homeDirectory = findHomeDir();
+      const configPath = homeDirectory ? join(homeDirectory, '.kube', 'config') : undefined;
+      if (configPath && existsSync(configPath)) {
+        defaults.loadFromFile(configPath);
+      } else if (
+        process.env.KUBERNETES_SERVICE_HOST &&
+        process.env.KUBERNETES_SERVICE_PORT &&
+        existsSync(Config.SERVICEACCOUNT_TOKEN_PATH) &&
+        existsSync(Config.SERVICEACCOUNT_CA_PATH)
+      ) {
+        defaults.loadFromCluster();
+      } else {
+        // loadFromDefault() otherwise silently falls back to localhost:8080.
+        throw new Error('No trusted Kubernetes cluster configured');
+      }
+    }
+    trustedCluster = defaults.getCurrentCluster();
+    if (!trustedCluster) {
+      throw new Error('No trusted Kubernetes cluster configured');
+    }
 
-  const skipTlsVerify = clusterObj.insecureSkipTlsVerify === true;
+    const server = new URL(trustedCluster.server);
+    if (!['https:', 'http:'].includes(server.protocol) || server.username || server.password) {
+      throw new Error('Invalid trusted Kubernetes server');
+    }
+    ca = trustedCluster.caFile
+      ? readFileSync(trustedCluster.caFile)
+      : bufferFrom(trustedCluster.caData);
+  } catch {
+    // Parser errors can include server-side credentials and filesystem paths.
+    throw new Error('Invalid trusted Kubernetes cluster configuration');
+  }
+
+  const config: AxiosRequestConfig = { maxRedirects: 0 };
 
   // HTTPS
-  const rejectUnauthorized = skipTlsVerify ? false : true;
-
-  const ca = bufferFrom(clusterObj.certificateAuthorityData);
   const cert = bufferFrom(userObj.clientCertificateData);
   const key = bufferFrom(userObj.clientKeyData);
 
   config.httpsAgent = new https.Agent({
-    rejectUnauthorized,
+    rejectUnauthorized: true,
     ca,
     cert,
     key,
-    servername: clusterObj.tlsServerName
+    servername: trustedCluster.tlsServerName
   });
 
   // Authorization Header
@@ -202,7 +242,7 @@ export function getAxiosRequestConfig(kubeConfig: KubeConfig): AxiosRequestConfi
       : undefined;
 
   // Base URL
-  config.baseURL = clusterObj.server.replace(/\/$/, '');
+  config.baseURL = trustedCluster.server.replace(/\/$/, '');
   return config;
 }
 

@@ -28,11 +28,26 @@ NODE_ENV="development"
 
 Set `NEXT_PUBLIC_MOCK_USER` to a JSON string containing your Sealos session kubeconfig when you need to mock a logged-in user.
 
+Backend Kubernetes requests use the API server and CA from the server's default
+kubeconfig (`KUBECONFIG`, `~/.kube/config`, or the in-cluster configuration), matching
+the Sealos frontend. For local development, configure a trusted kubeconfig on the
+server. The submitted kubeconfig supplies user credentials and namespace; its
+cluster address and TLS settings are ignored. TLS verification stays enabled and
+HTTP redirects are disabled.
+Configuration sources are checked in the order listed above. In-cluster use
+requires `KUBERNETES_SERVICE_HOST`, `KUBERNETES_SERVICE_PORT`, and the mounted
+ServiceAccount token and CA files. Missing or unreadable configuration rejects
+the request; it never falls back to the client's address or implicit localhost.
+API server URLs must use HTTP or HTTPS and must not contain credentials. Server
+configuration errors return a fixed message without configuration snippets or
+filesystem paths.
+
 ## Build
 
 ```bash
 pnpm build
 pnpm lint
+pnpm test
 make build
 ```
 
